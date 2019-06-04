@@ -33,7 +33,7 @@ class TcpTunnel(Thread):
             if self.client not in self.SOCKS:
                 for service,addr,isclose,isrecvall,recont,signs in ROUTES:
                     if re.search(signs,buff,re.IGNORECASE):
-                        print('Create route %s <--> %s'%str(addr),%str(self.clientaddr))
+                        print('Create route %s <--> %s'%(str(addr),str(self.clientaddr)))
                         self.isclose = isclose
                         self.recont = recont
                         self.isrecvall = isrecvall
