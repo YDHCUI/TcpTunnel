@@ -1,89 +1,111 @@
-#coding=utf8
+#coding = utf-8
 #codeby ydhcui
-#tcp端口复用程序
 import socket
+import sys
+import os
+import re
 from threading import Thread
-import sys,os,re
+
+class Hack(object):
+    def __init__(self,src_addr=None,dst_addr=None):
+        self.src_addr = src_addr
+        self.dst_addr = dst_addr
+
+    def request(self,data):
+        return data
+
+    def response(self,data):
+        return data
+
+class HttpHack(Hack):
+    def request(self,data):
+        data = re.sub('Host:.*?\r\n','Host: %s:%s\r\n'%(self.dst_addr),data.decode())
+        return data.encode()
 
 ROUTES = [
-   #(服务,(主机,端口),是否关闭连接,是否接收完成再发送,发包规则,路由规则)
-    ('HTTP',  ('127.0.0.1',    8081 ), True , True , {1:1} , b'^(GET|POST)'),
-    ('JRMP',  ('127.0.0.1',    8009 ), False, False, {2:2} , b'^JRMI'),
-    ('NC'  ,  ('127.0.0.1',    51   ), False, False, {1:1} , b'.*?')
+    {
+        'name'      :'HTTPS',
+        'addr'      :('127.0.0.1',443),
+        'route'     :b'^CONNECT',
+        'hack'      :Hack,
+    },{
+        'name'      :'HTTP',
+        'addr'      :('47.98.160.198',8315),
+        'route'     :b'^(GET|POST)',
+        'hack'      :HttpHack,
+    },{
+        'name'      :'JRMP',
+        'addr'      :('127.0.0.1',8009),
+        'route'     :b'^JRMI',
+        'hack'      :Hack,
+    },{
+        'name'      :'SSH',
+        'addr'      :('47.98.160.198',22),
+        'route'     :b'^SSH',
+        'hack'      :Hack,
+    },{
+        'name'      :'NC',
+        'addr'      :('127.0.0.1',51),
+        'route'     :b'.*?',
+        'hack'      :Hack,
+    }
 ]
 
 class TcpTunnel(Thread):
     SOCKS = {}
-    def __init__(self,client,clientaddr):
+    def __init__(self,srcsock,srcaddr):
         Thread.__init__(self)
-        self.client = client
-        self.clientaddr = clientaddr
-        self.sock = self.SOCKS[client] if client in self.SOCKS else socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-        self.isclose = True
-        self.recont = {1:1}
-        self.isrecvall = True
+        self.srcsock = srcsock
+        self.srcaddr = srcaddr
+        self.dstsock = self.SOCKS[srcsock] if srcsock in self.SOCKS else socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+
+    def s(self,dstsock,srcsock):
+        while True:
+            buf=dstsock.recv(10240)
+            srcsock.sendall(buf)
+            if not buf:
+                break
+        dstsock.close()
 
     def run(self):
-        i = 0
         while True:
-            buff = self.client.recv(10240)
+            buff = self.srcsock.recv(10240)
             if not buff:
                 break
-            i += 1
-            if self.client not in self.SOCKS:
-                for service,addr,isclose,isrecvall,recont,signs in ROUTES:
-                    if re.search(signs,buff,re.IGNORECASE):
-                        print('Create route %s <--> %s'%(str(addr),str(self.clientaddr)))
-                        self.isclose = isclose
-                        self.recont = recont
-                        self.isrecvall = isrecvall
-                        self.sock.connect(addr)
+            if self.srcsock not in self.SOCKS:
+                for value in ROUTES:
+                    if re.search(value['route'],buff,re.IGNORECASE):
+                        print('Create %s%s <--> %s'%(value['name'],str(value['addr']),str(self.srcaddr)))
+                        self.hack = value['hack'](self.srcaddr,value['addr'])
+                        self.dstsock.connect(value['addr'])
                         break
-                self.SOCKS[self.client] = self.sock
-            if i in self.recont:
-                for k in range(self.recont[i]-1):
-                    buff += self.client.recv(10240)
-            #print('recv',buff)
-            self.sock.sendall(buff)
-            data = b''
-            while True:
-                buff = self.sock.recv(10240)
-                if not buff:
-                    break
-                if self.isrecvall:
-                    data += buff
-                else:
-                    data = buff
-                    break
-            #print('send',data)
-            self.client.sendall(data)
-            if self.isclose:
-                self.client.close()
-                self.sock.close()
-                break
+                self.SOCKS[self.srcsock] = self.dstsock
+                Thread(target=self.s,args=(self.dstsock,self.srcsock,)).start()
+            self.dstsock.sendall(buff)
+        self.srcsock.close()
 
 class SockProxy(object):
-    def __init__(self,host='0.0.0.0',port=53,listen=20):
+    def __init__(self,host='0.0.0.0',port=53,listen=100):
         self.host = host
         self.port = port
         self.listen = listen
-        self.clientsock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-        self.clientsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.clientsock.bind((self.host,self.port))
+        self.socks = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        self.socks.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socks.bind((self.host,self.port))
 
     def start(self):
-        self.clientsock.listen(self.listen)
+        self.socks.listen(self.listen)
         print('Start Proxy Listen - %s:%s'%(self.host,self.port))
         while True:
-            client,addr = self.clientsock.accept()
-            T = TcpTunnel(client,addr)
+            sock,addr = self.socks.accept()
+            T = TcpTunnel(sock,addr)
             T.start()
 
 if __name__ == '__main__':
     try:
         port = int(sys.argv[1])
     except:
-        port = 1222
+        port = 1111
     try:
         c = SockProxy('0.0.0.0',port)
         c.start()
