@@ -24,18 +24,13 @@ class HttpHack(Hack):
 
 ROUTES = [
     {
-        'name'      :'HTTPS',
-        'addr'      :('127.0.0.1',443),
-        'route'     :b'^CONNECT',
-        'hack'      :Hack,
-    },{
         'name'      :'HTTP',
         'addr'      :('47.98.160.198',8315),
         'route'     :b'^(GET|POST)',
         'hack'      :HttpHack,
     },{
         'name'      :'JRMP',
-        'addr'      :('127.0.0.1',8009),
+        'addr'      :('47.98.160.198',8009),
         'route'     :b'^JRMI',
         'hack'      :Hack,
     },{
@@ -44,9 +39,30 @@ ROUTES = [
         'route'     :b'^SSH',
         'hack'      :Hack,
     },{
+        'name'      :'RDP',
+        'addr'      :('112.124.12.101',3389),
+        'route'     :b'^\x03\x00\x00',
+        'hack'      :Hack,
+    },{
+        'name'      :'PostgreSQL',
+        'addr'      :('127.0.0.1',5432),
+        'route'     :b'^\x00\x00\x00\x08\x04',
+        'hack'      :Hack,
+    },{
+        'name'      :'Oracle',
+        'addr'      :('127.0.0.1',1521),
+        'route'     :b'^\x00(\xec|\xf1)\x00\x00\x01\x00\x00\x00\x019\x01',
+        #'route'     :b'\(DESCRIPTION=\(CONNECT_DATA=\(SERVICE_NAME=',
+        'hack'      :Hack,
+    },{
+        'name'      :'MSSQL',
+        'addr'      :('127.0.0.1',1433),
+        'route'     :b'^\x12\x01\x00',
+        'hack'      :Hack,
+    },{
         'name'      :'NC',
         'addr'      :('127.0.0.1',51),
-        'route'     :b'.*?',
+        'route'     :b'.*',
         'hack'      :Hack,
     }
 ]
@@ -58,34 +74,48 @@ class TcpTunnel(Thread):
         self.srcsock = srcsock
         self.srcaddr = srcaddr
         self.dstsock = self.SOCKS[srcsock] if srcsock in self.SOCKS else socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        self.iskeep  = True
 
     def s(self,dstsock,srcsock):
-        while True:
-            buf=dstsock.recv(10240)
-            srcsock.sendall(buf)
-            if not buf:
+        while self.iskeep:
+            try:
+                buff = dstsock.recv(10240)
+            except Exception as e:
                 break
-        dstsock.close()
+            buff = self.hack.response(buff)
+            #print('recv',buff)
+            srcsock.sendall(buff)
+            if not buff:
+                self.iskeep = False
+                break
+        srcsock.close()
 
     def run(self):
-        while True:
-            buff = self.srcsock.recv(10240)
+        while self.iskeep:
+            try:
+                buff = self.srcsock.recv(10240)
+            except Exception as e:
+                break
             if not buff:
+                self.iskeep = False
                 break
             if self.srcsock not in self.SOCKS:
                 for value in ROUTES:
                     if re.search(value['route'],buff,re.IGNORECASE):
-                        print('Create %s%s <--> %s'%(value['name'],str(value['addr']),str(self.srcaddr)))
+                        print('[+]Connect %s%s <--> %s'%(value['name'],str(value['addr']),str(self.srcaddr)))
                         self.hack = value['hack'](self.srcaddr,value['addr'])
                         self.dstsock.connect(value['addr'])
                         break
                 self.SOCKS[self.srcsock] = self.dstsock
                 Thread(target=self.s,args=(self.dstsock,self.srcsock,)).start()
+            buff = self.hack.request(buff)
+            #print('send',buff)
             self.dstsock.sendall(buff)
-        self.srcsock.close()
+        self.dstsock.close()
+        print('[+]DisConnect %s%s <--> %s'%(value['name'],str(value['addr']),str(self.srcaddr)))
 
 class SockProxy(object):
-    def __init__(self,host='0.0.0.0',port=53,listen=100):
+    def __init__(self,host='0.0.0.0',port=1111,listen=100):
         self.host = host
         self.port = port
         self.listen = listen
